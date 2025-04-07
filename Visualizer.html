@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deployable Antenna Visualization Tool</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            background-color: #f5f5f5;
+        }
+        
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-height: 600px;
+        }
+        
+        #header {
+            background-color: #0B3D91;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+        }
+        
+        #content {
+            display: flex;
+            flex: 1;
+            position: relative;
+        }
+        
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #info-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            max-width: 280px;
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        #controls select, #controls button {
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+        
+        #controls button {
+            background-color: #0B3D91;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        
+        #controls button:hover {
+            background-color: #0E44A4;
+        }
+        
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <h2>Deployable Antenna Visualization Tool</h2>
+        </div>
+        <div id="content">
+            <div id="canvas-container"></div>
+            <div id="info-panel"></div>
+            <div id="controls">
+                <select id="frequency-select">
+                    <option value="1">1 GHz (L-Band)</option>
+                    <option value="5">5 GHz (C-Band)</option>
+                    <option value="10" selected>10 GHz (X-Band)</option>
+                    <option value="30">30 GHz (Ka-Band)</option>
+                    <option value="60">60 GHz (V-Band)</option>
+                </select>
+                <select id="antenna-select">
+                    <option value="meshReflector">Mesh Reflector</option>
+                    <option value="inflatable">Inflatable</option>
+                    <option value="origami">Origami Pattern</option>
+                    <option value="helical">Helical</option>
+                    <option value="dipole">Dipole Array</option>
+                    <option value="solidPanel">Solid Panel</option>
+                </select>
+                <div class="slider-container">
+                    <label for="diameter-slider">Size:</label>
+                    <input type="range" id="diameter-slider" min="1" max="10" step="0.5" value="5">
+                    <span id="diameter-value">5.0m</span>
+                </div>
+                <button id="deploy-btn">Deploy</button>
+                <button id="reset-btn">Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Main application variables
+        let scene, camera, renderer;
+        let antennaModel = null;
+        let isDeploying = false;
+        let deploymentProgress = 0;
+        let animationSpeed = 0.01;
+        let rotationGroup;
+        
+        // Antenna data by type and frequency
+        const antennaTypes = {
+            'meshReflector': { 
+                name: 'Mesh Reflector', 
+                freqRange: [1, 50],
+                description: 'Lightweight mesh structure that unfolds from a compact package to form a parabolic reflector.'
+            },
+            'inflatable': { 
+                name: 'Inflatable', 
+                freqRange: [1, 10],
+                description: 'Membrane structure that inflates to create a reflector surface or waveguide.'
+            },
+            'origami': { 
+                name: 'Origami Pattern', 
+                freqRange: [5, 100],
+                description: 'Precisely folded structure that unfolds along pre-designed crease patterns.'
+            },
+            'helical': { 
+                name: 'Helical', 
+                freqRange: [0.3, 3],
+                description: 'Spiral structure that extends to form a helical antenna for circular polarization.'
+            },
+            'dipole': { 
+                name: 'Dipole Array', 
+                freqRange: [0.1, 2],
+                description: 'Array of dipole elements that extend from a central hub.'
+            },
+            'solidPanel': { 
+                name: 'Solid Panel', 
+                freqRange: [10, 300],
+                description: 'Rigid panels that unfold from a stacked configuration to form a reflector.'
+            }
+        };
+        
+        // Initialize Three.js scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f5ff);
+            
+            // Create rotation group for mouse control
+            rotationGroup = new THREE.Group();
+            scene.add(rotationGroup);
+            
+            // Create camera
+            const container = document.getElementById('canvas-container');
+            const aspect = container.clientWidth / container.clientHeight;
+            camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
+            camera.position.set(0, 5, 15);
+            camera.lookAt(0, 0, 0);
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+            
+            // Add lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+            
+            // Add a grid helper
+            const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x888888);
+            gridHelper.position.y = -0.01;
+            rotationGroup.add(gridHelper);
+            
+            // Setup event listeners
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('frequency-select').addEventListener('change', updateAntennaOptions);
+            document.getElementById('antenna-select').addEventListener('change', createAntenna);
+            document.getElementById('diameter-slider').addEventListener('input', updateDiameterValue);
+            document.getElementById('diameter-slider').addEventListener('change', createAntenna);
+            document.getElementById('deploy-btn').addEventListener('click', toggleDeployment);
+            document.getElementById('reset-btn').addEventListener('click', resetDeployment);
+            
+            // Setup mouse controls
+            setupMouseControls();
+            
+            // Initialize antenna options based on frequency
+            updateAntennaOptions();
+            
+            // Start animation loop
+            animate();
+        }
+        
+        // Mouse interaction for rotation
+        function setupMouseControls() {
+            let isMouseDown = false;
+            let lastMouseX = 0;
+            let lastMouseY = 0;
+            
+            document.addEventListener('mousedown', (event) => {
+                isMouseDown = true;
+                lastMouseX = event.clientX;
+                lastMouseY = event.clientY;
+            });
+            
+            document.addEventListener('mousemove', (event) => {
+                if (!isMouseDown) return;
+                
+                const deltaX = event.clientX - lastMouseX;
+                const deltaY = event.clientY - lastMouseY;
+                
+                rotationGroup.rotation.y += deltaX * 0.01;
+                
+                // Limit vertical rotation to avoid flipping
+                const newRotationX = rotationGroup.rotation.x + deltaY * 0.01;
+                if (newRotationX < Math.PI/3 && newRotationX > -Math.PI/3) {
+                    rotationGroup.rotation.x = newRotationX;
+                }
+                
+                lastMouseX = event.clientX;
+                lastMouseY = event.clientY;
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isMouseDown = false;
+            });
+            
+            // Add mouse wheel for zoom
+            document.addEventListener('wheel', (event) => {
+                // Adjust camera position for zoom
+                const zoomSpeed = 0.5;
+                const direction = new THREE.Vector3(0, 0, Math.sign(event.deltaY) * zoomSpeed);
+                
+                // Transform to camera's local space
+                direction.applyQuaternion(camera.quaternion);
+                camera.position.add(direction);
+                
+                // Limit zoom distance
+                const distance = camera.position.length();
+                if (distance < 5) {
+                    camera.position.normalize().multiplyScalar(5);
+                } else if (distance > 30) {
+                    camera.position.normalize().multiplyScalar(30);
+                }
+                
+                event.preventDefault();
+            });
+        }
+        
+        // Filter available antennas based on frequency
+        function updateAntennaOptions() {
+            const frequencySelect = document.getElementById('frequency-select');
+            const antennaSelect = document.getElementById('antenna-select');
+            const frequency = parseFloat(frequencySelect.value);
+            
+            // Clear current options
+            antennaSelect.innerHTML = '';
+            
+            // Add only compatible antennas
+            let hasSelected = false;
+            for (const [key, antenna] of Object.entries(antennaTypes)) {
+                if (frequency >= antenna.freqRange[0] && frequency <= antenna.freqRange[1]) {
+                    const option = document.createElement('option');
+                    option.value = key;
+                    option.textContent = antenna.name;
+                    antennaSelect.appendChild(option);
+                    
+                    // Select the first compatible antenna
+                    if (!hasSelected) {
+                        option.selected = true;
+                        hasSelected = true;
+                    }
+                }
+            }
+            
+            // Create the selected antenna
+            createAntenna();
+        }
+        
+        // Update diameter value display
+        function updateDiameterValue() {
+            const diameterSlider = document.getElementById('diameter-slider');
+            const diameterValue = document.getElementById('diameter-value');
+            diameterValue.textContent = diameterSlider.value + 'm';
+        }
+        
+        // Create antenna model
+        function createAntenna() {
+            // Remove existing antenna
+            if (antennaModel) {
+                rotationGroup.remove(antennaModel);
+            }
+            
+            // Reset deployment state
+            resetDeployment();
+            
+            // Get selected parameters
+            const antennaType = document.getElementById('antenna-select').value;
+            const frequency = parseFloat(document.getElementById('frequency-select').value);
+            const diameter = parseFloat(document.getElementById('diameter-slider').value);
+            
+            // Create new antenna group
+            antennaModel = new THREE.Group();
+            rotationGroup.add(antennaModel);
+            
+            // Create the specific antenna type
+            switch (antennaType) {
+                case 'meshReflector':
+                    createMeshReflector(diameter);
+                    break;
+                case 'inflatable':
+                    createInflatable(diameter);
+                    break;
+                case 'origami':
+                    createOrigami(diameter);
+                    break;
+                case 'helical':
+                    createHelical(diameter);
+                    break;
+                case 'dipole':
+                    createDipole(diameter);
+                    break;
+                case 'solidPanel':
+                    createSolidPanel(diameter);
+                    break;
+                default:
+                    createMeshReflector(diameter);
+            }
+            
+            // Update info panel
+            updateInfoPanel(antennaType, frequency, diameter);
+        }
+        
+        // Create Mesh Reflector Antenna
+        function createMeshReflector(diameter) {
+            const radius = diameter / 2;
+            
+            // Create central hub
+            const hubGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.3, 16);
+            const hubMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            hub.position.y = 0;
+            antennaModel.add(hub);
+            
+            // Create mesh reflector (parabolic shape) - folded state
+            const reflectorGeometry = new THREE.SphereGeometry(radius, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+            const reflectorMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0xCCCCCC, 
+                wireframe: true,
+                transparent: true,
+                opacity: 0.7
+            });
+            const reflector = new THREE.Mesh(reflectorGeometry, reflectorMaterial);
+            reflector.rotation.x = Math.PI / 2;
+            reflector.scale.set(0.1, 0.1, 0.1); // Start folded
+            antennaModel.add(reflector);
+            
+            // Create feed support - folded state
+            const feedSupportGeometry = new THREE.CylinderGeometry(0.05, 0.05, radius, 8);
+            const feedSupportMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
+            const feedSupport = new THREE.Mesh(feedSupportGeometry, feedSupportMaterial);
+            feedSupport.rotation.z = Math.PI / 2;
+            feedSupport.scale.set(0.1, 0.1, 0.1); // Start folded
+            antennaModel.add(feedSupport);
+            
+            // Create feed horn - folded state
+            const feedHornGeometry = new THREE.ConeGeometry(0.15, 0.3, 16);
+            const feedHornMaterial = new THREE.MeshPhongMaterial({ color: 0x444444 });
+            const feedHorn = new THREE.Mesh(feedHornGeometry, feedHornMaterial);
+            feedHorn.position.set(0, 0, 0); // Start at center
+            feedHorn.scale.set(0.1, 0.1, 0.1); // Start folded
+            antennaModel.add(feedHorn);
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'meshReflector',
+                reflector: {
+                    mesh: reflector,
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                },
+                feedSupport: {
+                    mesh: feedSupport,
+                    startPosition: new THREE.Vector3(0, 0, 0),
+                    endPosition: new THREE.Vector3(0, radius, 0),
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                },
+                feedHorn: {
+                    mesh: feedHorn,
+                    startPosition: new THREE.Vector3(0, 0, 0),
+                    endPosition: new THREE.Vector3(0, radius + 0.15, 0),
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                }
+            };
+        }
+        
+        // Create Inflatable Antenna
+        function createInflatable(diameter) {
+            const radius = diameter / 2;
+            
+            // Create central hub
+            const hubGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.3, 16);
+            const hubMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            hub.position.y = 0;
+            antennaModel.add(hub);
+            
+            // Create inflatable membrane - folded state
+            const membraneGeometry = new THREE.SphereGeometry(radius, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
+            const membraneMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x88AACC,
+                transparent: true,
+                opacity: 0.6
+            });
+            const membrane = new THREE.Mesh(membraneGeometry, membraneMaterial);
+            membrane.rotation.x = Math.PI / 2;
+            membrane.scale.set(0.1, 0.1, 0.1); // Start folded
+            antennaModel.add(membrane);
+            
+            // Create feed - folded state
+            const feedGeometry = new THREE.ConeGeometry(0.2, 0.4, 16);
+            const feedMaterial = new THREE.MeshPhongMaterial({ color: 0x444444 });
+            const feed = new THREE.Mesh(feedGeometry, feedMaterial);
+            feed.position.set(0, 0, 0); // Start at center
+            feed.scale.set(0.1, 0.1, 0.1); // Start folded
+            antennaModel.add(feed);
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'inflatable',
+                membrane: {
+                    mesh: membrane,
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                },
+                feed: {
+                    mesh: feed,
+                    startPosition: new THREE.Vector3(0, 0, 0),
+                    endPosition: new THREE.Vector3(0, radius, 0),
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                }
+            };
+        }
+        
+        // Create Origami Pattern Antenna
+        function createOrigami(diameter) {
+            const radius = diameter / 2;
+            const segments = 12;
+            
+            // Create central hub
+            const hubGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.3, 16);
+            const hubMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            hub.position.y = 0;
+            antennaModel.add(hub);
+            
+            // Create origami segments - folded state
+            const segmentGroup = new THREE.Group();
+            const segmentAngle = (Math.PI * 2) / segments;
+            
+            for (let i = 0; i < segments; i++) {
+                const angle = i * segmentAngle;
+                const nextAngle = (i + 1) * segmentAngle;
+                
+                // Create triangle shape for segment
+                const shape = new THREE.Shape();
+                shape.moveTo(0, 0);
+                shape.lineTo(
+                    Math.cos(angle) * radius,
+                    Math.sin(angle) * radius
+                );
+                shape.lineTo(
+                    Math.cos(nextAngle) * radius,
+                    Math.sin(nextAngle) * radius
+                );
+                shape.lineTo(0, 0);
+                
+                const segmentGeometry = new THREE.ShapeGeometry(shape);
+                const segmentMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0xFFFFFF,
+                    side: THREE.DoubleSide
+                });
+                const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                
+                // Fold up in z-direction (start folded)
+                segment.rotation.x = Math.PI / 2;
+                segment.userData = {
+                    index: i
+                };
+                
+                segmentGroup.add(segment);
+            }
+            
+            segmentGroup.scale.set(0.2, 0.2, 0.01); // Start folded
+            antennaModel.add(segmentGroup);
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'origami',
+                segmentGroup: {
+                    mesh: segmentGroup,
+                    startScale: new THREE.Vector3(0.2, 0.2, 0.01),
+                    endScale: new THREE.Vector3(1, 1, 1),
+                    startRotation: new THREE.Euler(Math.PI / 2, 0, 0),
+                    endRotation: new THREE.Euler(0, 0, 0)
+                }
+            };
+        }
+        
+        // Create Helical Antenna
+        function createHelical(diameter) {
+            const turns = 8;
+            const height = diameter;
+            
+            // Create base
+            const baseGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.y = -0.05;
+            antennaModel.add(base);
+            
+            // Create helix - start compressed
+            const helixPoints = [];
+            const helixRadius = 0.3;
+            
+            for (let i = 0; i <= turns * 16; i++) {
+                const t = i / (turns * 16);
+                const angle = t * turns * Math.PI * 2;
+                helixPoints.push(new THREE.Vector3(
+                    helixRadius * Math.cos(angle),
+                    t * height,
+                    helixRadius * Math.sin(angle)
+                ));
+            }
+            
+            const helixCurve = new THREE.CatmullRomCurve3(helixPoints);
+            const helixGeometry = new THREE.TubeGeometry(helixCurve, turns * 16, 0.05, 8, false);
+            const helixMaterial = new THREE.MeshPhongMaterial({ color: 0xCCCC00 });
+            const helix = new THREE.Mesh(helixGeometry, helixMaterial);
+            
+            helix.scale.y = 0.1; // Start compressed
+            antennaModel.add(helix);
+            
+            // Create center rod - start compressed
+            const rodGeometry = new THREE.CylinderGeometry(0.03, 0.03, height, 16);
+            const rodMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
+            const rod = new THREE.Mesh(rodGeometry, rodMaterial);
+            
+            rod.position.y = height / 2;
+            rod.scale.y = 0.1; // Start compressed
+            antennaModel.add(rod);
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'helical',
+                helix: {
+                    mesh: helix,
+                    startScale: new THREE.Vector3(1, 0.1, 1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                },
+                rod: {
+                    mesh: rod,
+                    startScale: new THREE.Vector3(1, 0.1, 1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                }
+            };
+        }
+        
+        // Create Dipole Array
+        function createDipole(diameter) {
+            const elements = Math.floor(diameter * 2);
+            const rows = Math.ceil(Math.sqrt(elements));
+            const cols = Math.ceil(elements / rows);
+            const spacing = diameter / Math.max(rows, cols);
+            
+            // Create base plate
+            const baseGeometry = new THREE.BoxGeometry(diameter, 0.1, diameter);
+            const baseMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.y = -0.05;
+            antennaModel.add(base);
+            
+            // Create dipole elements - start folded
+            const dipoles = [];
+            
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    const index = row * cols + col;
+                    if (index >= elements) continue;
+                    
+                    // Position in grid
+                    const x = (col - (cols - 1) / 2) * spacing;
+                    const z = (row - (rows - 1) / 2) * spacing;
+                    
+                    // Create dipole element
+                    const dipole = new THREE.Group();
+                    dipole.position.set(x, 0, z);
+                    
+                    // Upper rod
+                    const upperRodGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.5, 8);
+                    const upperRodMaterial = new THREE.MeshPhongMaterial({ color: 0xCCCC00 });
+                    const upperRod = new THREE.Mesh(upperRodGeometry, upperRodMaterial);
+                    upperRod.position.y = 0;
+                    upperRod.scale.y = 0.1; // Start folded
+                    dipole.add(upperRod);
+                    
+                    // Lower rod
+                    const lowerRodGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.5, 8);
+                    const lowerRodMaterial = new THREE.MeshPhongMaterial({ color: 0xCCCC00 });
+                    const lowerRod = new THREE.Mesh(lowerRodGeometry, lowerRodMaterial);
+                    lowerRod.position.y = 0;
+                    lowerRod.scale.y = 0.1; // Start folded
+                    lowerRod.rotation.x = Math.PI;
+                    dipole.add(lowerRod);
+                    
+                    // Connector
+                    const connectorGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+                    const connectorMaterial = new THREE.MeshPhongMaterial({ color: 0x444444 });
+                    const connector = new THREE.Mesh(connectorGeometry, connectorMaterial);
+                    dipole.add(connector);
+                    
+                    antennaModel.add(dipole);
+                    
+                    // Store for animation
+                    dipoles.push({
+                        upperRod: {
+                            mesh: upperRod,
+                            startPosition: new THREE.Vector3(0, 0, 0),
+                            endPosition: new THREE.Vector3(0, 0.25, 0),
+                            startScale: new THREE.Vector3(1, 0.1, 1),
+                            endScale: new THREE.Vector3(1, 1, 1)
+                        },
+                        lowerRod: {
+                            mesh: lowerRod,
+                            startPosition: new THREE.Vector3(0, 0, 0),
+                            endPosition: new THREE.Vector3(0, -0.25, 0),
+                            startScale: new THREE.Vector3(1, 0.1, 1),
+                            endScale: new THREE.Vector3(1, 1, 1)
+                        },
+                        distance: Math.sqrt(x*x + z*z) / (diameter/2) // Normalized distance from center (0-1)
+                    });
+                }
+            }
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'dipole',
+                dipoles: dipoles
+            };
+        }
+        
+        // Create Solid Panel Antenna
+        function createSolidPanel(diameter) {
+            const radius = diameter / 2;
+            const panels = 8;
+            
+            // Create central hub
+            const hubGeometry = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 16);
+            const hubMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            hub.position.y = 0;
+            antennaModel.add(hub);
+            
+            // Create panels - start folded
+            const panelGroup = new THREE.Group();
+            const panelAngle = (Math.PI * 2) / panels;
+            const panelData = [];
+            
+            for (let i = 0; i < panels; i++) {
+                const angle = i * panelAngle;
+                
+                // Create panel
+                const shape = new THREE.Shape();
+                shape.moveTo(0, 0);
+                shape.lineTo(radius * Math.cos(angle - panelAngle * 0.4), radius * Math.sin(angle - panelAngle * 0.4));
+                shape.lineTo(radius * Math.cos(angle + panelAngle * 0.4), radius * Math.sin(angle + panelAngle * 0.4));
+                shape.lineTo(0, 0);
+                
+                const panelGeometry = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false });
+                const panelMaterial = new THREE.MeshPhongMaterial({ color: 0xDDDDDD });
+                const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+                
+                // Start folded (rotate down)
+                panel.rotation.x = Math.PI / 2;
+                panel.userData = {
+                    index: i
+                };
+                
+                panelGroup.add(panel);
+                
+                // Store for animation
+                panelData.push({
+                    mesh: panel,
+                    startRotation: new THREE.Euler(Math.PI / 2, 0, 0),
+                    endRotation: new THREE.Euler(0, 0, 0),
+                    index: i
+                });
+            }
+            
+            antennaModel.add(panelGroup);
+            
+            // Add feed at center - folded state
+            const feedGeometry = new THREE.ConeGeometry(0.15, 0.3, 16);
+            const feedMaterial = new THREE.MeshPhongMaterial({ color: 0x444444 });
+            const feed = new THREE.Mesh(feedGeometry, feedMaterial);
+            feed.position.set(0, 0, 0);
+            feed.scale.set(0.1, 0.1, 0.1);
+            antennaModel.add(feed);
+            
+            // Store deployment data
+            antennaModel.userData = {
+                type: 'solidPanel',
+                panels: panelData,
+                feed: {
+                    mesh: feed,
+                    startPosition: new THREE.Vector3(0, 0, 0),
+                    endPosition: new THREE.Vector3(0, 0.4, 0),
+                    startScale: new THREE.Vector3(0.1, 0.1, 0.1),
+                    endScale: new THREE.Vector3(1, 1, 1)
+                }
+            };
+        }
+        
+        // Update info panel
+        function updateInfoPanel(type, frequency, diameter) {
+            const infoPanel = document.getElementById('info-panel');
+            const antenna = antennaTypes[type];
+            
+            // Calculate wavelength
+            const wavelength = 0.3 / frequency; // in meters
+            
+            // Approximate gain calculation
+            let gain;
+            if (type === 'meshReflector' || type === 'solidPanel' || type === 'inflatable') {
+                // Parabolic reflector gain formula
+                const efficiency = type === 'inflatable' ? 0.5 : 0.6;
+                gain = Math.pow(Math.PI * diameter / wavelength, 2) * efficiency;
+                gain = (10 * Math.log10(gain)).toFixed(1);
+            } else if (type === 'helical') {
+                // Helical antenna gain approximation
+                const turns = 8;
+                const circumference = Math.PI * 0.6; // Helix diameter is 0.6m
+                gain = 12 * Math.pow(circumference / wavelength, 2) * turns;
+                gain = (10 * Math.log10(gain)).toFixed(1);
+            } else {
+                // Generic formula for other types
+                gain = (10 * Math.log10(Math.pow(diameter / wavelength, 2) * 4 * Math.PI * 0.5)).toFixed(1);
+            }
+            
+            // Update info display
+            infoPanel.innerHTML = `
+                <h3>${antenna.name} Antenna</h3>
+                <p>${antenna.description}</p>
+                <ul>
+                    <li>Frequency: ${frequency.toFixed(1)} GHz</li>
+                    <li>Wavelength: ${wavelength.toFixed(3)} m</li>
+                    <li>Diameter: ${diameter.toFixed(1)} m</li>
+                    <li>Gain: ${gain} dBi</li>
+                    <li>Frequency Range: ${antenna.freqRange[0]}-${antenna.freqRange[1]} GHz</li>
+                </ul>
+                <p>Deployment: ${(deploymentProgress * 100).toFixed(0)}%</p>
+            `;
+        }
+        
+        // Toggle deployment animation
+        function toggleDeployment() {
+            const deployBtn = document.getElementById('deploy-btn');
+            
+            if (isDeploying) {
+                isDeploying = false;
+                deployBtn.textContent = 'Deploy';
+            } else {
+                isDeploying = true;
+                deployBtn.textContent = 'Pause';
+            }
+        }
+        
+        // Reset deployment
+        function resetDeployment() {
+            isDeploying = false;
+            deploymentProgress = 0;
+            document.getElementById('deploy-btn').textContent = 'Deploy';
+            
+            // Reset antenna to folded state
+            if (antennaModel && antennaModel.userData) {
+                applyDeployment(0);
+                
+                // Update info panel
+                updateInfoPanel(
+                    document.getElementById('antenna-select').value,
+                    parseFloat(document.getElementById('frequency-select').value),
+                    parseFloat(document.getElementById('diameter-slider').value)
+                );
+            }
+        }
+        
+        // Apply deployment at a specific progress level
+        function applyDeployment(progress) {
+            if (!antennaModel || !antennaModel.userData) return;
+            
+            const type = antennaModel.userData.type;
+            const userData = antennaModel.userData;
+            
+            // Helper function to interpolate Vector3
+            function lerpVector(start, end, alpha) {
+                const result = new THREE.Vector3();
+                result.x = start.x + (end.x - start.x) * alpha;
+                result.y = start.y + (end.y - start.y) * alpha;
+                result.z = start.z + (end.z - start.z) * alpha;
+                return result;
+            }
+            
+            // Helper function to interpolate Euler rotation
+            function lerpEuler(start, end, alpha) {
+                const result = new THREE.Euler();
+                result.x = start.x + (end.x - start.x) * alpha;
+                result.y = start.y + (end.y - start.y) * alpha;
+                result.z = start.z + (end.z - start.z) * alpha;
+                return result;
+            }
+            
+            switch (type) {
+                case 'meshReflector':
+                    // Animate reflector expansion
+                    userData.reflector.mesh.scale.copy(
+                        lerpVector(userData.reflector.startScale, userData.reflector.endScale, progress)
+                    );
+                    
+                    // Animate feed support
+                    userData.feedSupport.mesh.position.copy(
+                        lerpVector(userData.feedSupport.startPosition, userData.feedSupport.endPosition, progress)
+                    );
+                    userData.feedSupport.mesh.scale.copy(
+                        lerpVector(userData.feedSupport.startScale, userData.feedSupport.endScale, progress)
+                    );
+                    
+                    // Animate feed horn
+                    userData.feedHorn.mesh.position.copy(
+                        lerpVector(userData.feedHorn.startPosition, userData.feedHorn.endPosition, progress)
+                    );
+                    userData.feedHorn.mesh.scale.copy(
+                        lerpVector(userData.feedHorn.startScale, userData.feedHorn.endScale, progress)
+                    );
+                    break;
+                    
+                case 'inflatable':
+                    // Animate inflatable expansion with slightly non-linear inflation
+                    const inflateProgress = Math.pow(progress, 0.8);
+                    userData.membrane.mesh.scale.copy(
+                        lerpVector(userData.membrane.startScale, userData.membrane.endScale, inflateProgress)
+                    );
+                    
+                    // Animate feed
+                    userData.feed.mesh.position.copy(
+                        lerpVector(userData.feed.startPosition, userData.feed.endPosition, progress)
+                    );
+                    userData.feed.mesh.scale.copy(
+                        lerpVector(userData.feed.startScale, userData.feed.endScale, progress)
+                    );
+                    break;
+                    
+                case 'origami':
+                    // Animate origami unfolding
+                    userData.segmentGroup.mesh.scale.copy(
+                        lerpVector(userData.segmentGroup.startScale, userData.segmentGroup.endScale, progress)
+                    );
+                    
+                    // Rotate segments down gradually
+                    const rotX = userData.segmentGroup.startRotation.x * (1 - progress);
+                    userData.segmentGroup.mesh.rotation.x = rotX;
+                    break;
+                    
+                case 'helical':
+                    // Animate helical extension (y-axis only)
+                    userData.helix.mesh.scale.y = userData.helix.startScale.y + 
+                        (userData.helix.endScale.y - userData.helix.startScale.y) * progress;
+                    
+                    // Animate rod extension (y-axis only)
+                    userData.rod.mesh.scale.y = userData.rod.startScale.y + 
+                        (userData.rod.endScale.y - userData.rod.startScale.y) * progress;
+                    break;
+                    
+                case 'dipole':
+                    // Animate dipole elements extending
+                    userData.dipoles.forEach(dipole => {
+                        // Staggered deployment based on distance from center
+                        const delay = 0.3 * dipole.distance;
+                        const elementProgress = Math.max(0, Math.min(1, (progress - delay) / (1 - delay)));
+                        
+                        // Upper rod
+                        dipole.upperRod.mesh.position.copy(
+                            lerpVector(dipole.upperRod.startPosition, dipole.upperRod.endPosition, elementProgress)
+                        );
+                        dipole.upperRod.mesh.scale.copy(
+                            lerpVector(dipole.upperRod.startScale, dipole.upperRod.endScale, elementProgress)
+                        );
+                        
+                        // Lower rod
+                        dipole.lowerRod.mesh.position.copy(
+                            lerpVector(dipole.lowerRod.startPosition, dipole.lowerRod.endPosition, elementProgress)
+                        );
+                        dipole.lowerRod.mesh.scale.copy(
+                            lerpVector(dipole.lowerRod.startScale, dipole.lowerRod.endScale, elementProgress)
+                        );
+                    });
+                    break;
+                    
+                case 'solidPanel':
+                    // Animate panel unfolding
+                    userData.panels.forEach(panel => {
+                        // Sequential deployment
+                        const totalPanels = userData.panels.length;
+                        const panelDelay = 0.5 / totalPanels;
+                        const panelDuration = 1 - (panelDelay * (totalPanels - 1));
+                        
+                        const panelProgress = Math.max(0, Math.min(1, 
+                            (progress - (panel.index * panelDelay)) / panelDuration
+                        ));
+                        
+                        // Rotate panel upward
+                        const rotation = lerpEuler(panel.startRotation, panel.endRotation, panelProgress);
+                        panel.mesh.rotation.x = rotation.x;
+                    });
+                    
+                    // Animate feed
+                    userData.feed.mesh.position.copy(
+                        lerpVector(userData.feed.startPosition, userData.feed.endPosition, progress)
+                    );
+                    userData.feed.mesh.scale.copy(
+                        lerpVector(userData.feed.startScale, userData.feed.endScale, progress)
+                    );
+                    break;
+            }
+        }
+        
+        // Handle window resize
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update deployment animation if active
+            if (isDeploying && deploymentProgress < 1) {
+                deploymentProgress += animationSpeed;
+                if (deploymentProgress > 1) deploymentProgress = 1;
+                
+                // Apply deployment animation
+                applyDeployment(deploymentProgress);
+                
+                // Update info panel with progress
+                updateInfoPanel(
+                    document.getElementById('antenna-select').value,
+                    parseFloat(document.getElementById('frequency-select').value),
+                    parseFloat(document.getElementById('diameter-slider').value)
+                );
+                
+                // Check if deployment is complete
+                if (deploymentProgress >= 1) {
+                    isDeploying = false;
+                    document.getElementById('deploy-btn').textContent = 'Deploy';
+                }
+            }
+            
+            // Render the scene
+            renderer.render(scene, camera);
+        }
+        
+        // Start the application when window loads
+        window.onload = init;
+    </script>
+</body>
+</html>
